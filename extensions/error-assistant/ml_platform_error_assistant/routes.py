@@ -903,42 +903,254 @@ class DebuggerTutorHandler(APIHandler):
 # MODEL RECOMMENDER HANDLER
 # =========================================================
 
+
 class ModelRecommendHandler(APIHandler):
+
     @tornado.web.authenticated
     def post(self):
         self.set_header("Content-Type", "application/json")
+
         try:
             payload = json.loads(self.request.body)
+
             if not isinstance(payload, dict):
-                raise ValueError("Request body must be a JSON object.")
-            file_path = str(payload.get("file_path", "")).strip()
+                raise ValueError(
+                    "Request body must be a JSON object."
+                )
+
+            file_path = payload.get("file_path", "")
+
+            if not isinstance(file_path, str):
+                raise ValueError(
+                    "file_path must be a string."
+                )
+
+            file_path = file_path.strip()
+
             if not file_path:
-                raise ValueError("file_path is required.")
-            target_col = payload.get("target_col") or None
+                raise ValueError(
+                    "file_path is required."
+                )
+
+            target_col = payload.get(
+                "target_col",
+                payload.get("target_column"),
+            )
+
             if target_col is not None:
-                target_col = str(target_col).strip() or None
-        except (json.JSONDecodeError, ValueError) as exc:
+                if not isinstance(target_col, str):
+                    raise ValueError(
+                        "target_col must be a string."
+                    )
+                target_col = target_col.strip() or None
+
+            evaluate = payload.get(
+                "evaluate_models",
+                False,
+            )
+
+            if not isinstance(evaluate, bool):
+                raise ValueError(
+                    "evaluate_models must be a boolean."
+                )
+
+            verified_code = payload.get(
+                "verified_code",
+                False,
+            )
+
+            if not isinstance(verified_code, bool):
+                raise ValueError(
+                    "verified_code must be a boolean."
+                )
+
+            if evaluate and verified_code:
+                raise ValueError(
+                    "Select either empirical evaluation "
+                    "or verified code generation, not both."
+                )
+
+            if evaluate:
+                if not target_col:
+                    raise ValueError(
+                        "Select a target column before "
+                        "running empirical evaluation."
+                    )
+
+                feature_columns = payload.get(
+                    "feature_columns"
+                )
+
+                if feature_columns is not None:
+                    if (
+                        not isinstance(feature_columns, list)
+                        or not all(
+                            isinstance(item, str)
+                            for item in feature_columns
+                        )
+                    ):
+                        raise ValueError(
+                            "feature_columns must be "
+                            "a list of strings."
+                        )
+
+                task = payload.get("task")
+
+                if task not in (
+                    None,
+                    "classification",
+                    "regression",
+                ):
+                    raise ValueError(
+                        "task must be classification "
+                        "or regression."
+                    )
+
+                cv_folds = payload.get(
+                    "cv_folds",
+                    5,
+                )
+
+                if (
+                    not isinstance(cv_folds, int)
+                    or isinstance(cv_folds, bool)
+                    or not 2 <= cv_folds <= 10
+                ):
+                    raise ValueError(
+                        "cv_folds must be "
+                        "an integer between 2 and 10."
+                    )
+
+                evaluate_scalers = payload.get(
+                    "evaluate_scalers",
+                    False,
+                )
+
+                if not isinstance(
+                    evaluate_scalers,
+                    bool,
+                ):
+                    raise ValueError(
+                        "evaluate_scalers must "
+                        "be a boolean."
+                    )
+
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            ValueError,
+        ) as exc:
             self.set_status(400)
-            self.finish(json.dumps({"error": str(exc)}))
+            self.finish(json.dumps({
+                "error": str(exc),
+            }))
             return
 
-        path = pathlib.Path(file_path)
-        if not path.exists():
-            self.set_status(404)
-            self.finish(json.dumps({"error": f"File not found: {file_path}"}))
+        # Resolve datasets against the trusted Jupyter
+        # Server workspace, never an HTTP-supplied root.
+        from .dataset_security import (
+            DatasetAccessError,
+            resolve_workspace_dataset,
+        )
+
+        contents_manager = self.settings.get(
+            "contents_manager"
+        )
+
+        workspace_root = getattr(
+            contents_manager,
+            "root_dir",
+            None,
+        )
+
+        if not workspace_root:
+            server_app = self.settings.get("serverapp")
+            workspace_root = getattr(
+                server_app,
+                "root_dir",
+                None,
+            )
+
+        if not workspace_root:
+            self.set_status(500)
+            self.finish(json.dumps({
+                "error": (
+                    "ModelMind could not determine the "
+                    "trusted Jupyter workspace root."
+                ),
+            }))
             return
 
         try:
-            result = recommend_models(path, target_col=target_col)
+            path = resolve_workspace_dataset(
+                file_path,
+                workspace_root,
+            )
+        except DatasetAccessError as exc:
+            self.set_status(403)
+            self.finish(json.dumps({
+                "error": str(exc),
+            }))
+            return
+
+        try:
+            if evaluate:
+                from .evaluated_recommendation import (
+                    recommend_models_evaluated,
+                )
+
+                result = recommend_models_evaluated(
+                    path,
+                    target_column=target_col,
+                    feature_columns=feature_columns,
+                    task=task,
+                    cv_folds=cv_folds,
+                    evaluate_scalers=evaluate_scalers,
+                )
+
+                if not result.get("handled", False):
+                    self.set_status(400)
+
+            elif verified_code:
+                # Opt-in verified generated Python code.
+                # Original model rankings, scores and
+                # educational explanations are preserved.
+                from .verified_recommendation_adapter import (
+                    recommend_models_with_verified_code,
+                )
+
+                result = recommend_models_with_verified_code(
+                    path,
+                    target_col=target_col,
+                )
+
+                if not result.get("handled", False):
+                    self.set_status(400)
+
+            else:
+                # Original frontend behavior unchanged.
+                result = recommend_models(
+                    path,
+                    target_col=target_col,
+                )
+
         except Exception as exc:
             self.set_status(500)
-            self.finish(json.dumps({"error": str(exc)}))
+            self.finish(json.dumps({
+                "error": str(exc),
+            }))
             return
 
         self.finish(json.dumps(result))
 
 
 def setup_route_handlers(web_app):
+    from .background_evaluation_routes import (
+        EvaluationJobSubmitHandler,
+        EvaluationJobStatusHandler,
+        EvaluationJobCancelHandler,
+    )
+
     host_pattern = ".*$"
     base_url = web_app.settings["base_url"]
 
@@ -966,6 +1178,26 @@ def setup_route_handlers(web_app):
     ai_chat_route_pattern = url_path_join(base_url, "api", "ai", "chat")
     model_recommend_route_pattern = url_path_join(base_url, "api", "dataset", "model-recommend")
 
+    # ModelMind background evaluation endpoints
+    evaluation_submit_pattern = url_path_join(
+        base_url, "api", "dataset", "evaluation-jobs"
+    )
+    evaluation_status_pattern = url_path_join(
+        base_url,
+        "api",
+        "dataset",
+        "evaluation-jobs",
+        r"([a-f0-9]{32})",
+    )
+    evaluation_cancel_pattern = url_path_join(
+        base_url,
+        "api",
+        "dataset",
+        "evaluation-jobs",
+        r"([a-f0-9]{32})",
+        "cancel",
+    )
+
     handlers = [
         (health_route_pattern, HealthHandler),
         (gemini_api_key_route_pattern, GeminiAPIKeyHandler),
@@ -989,6 +1221,19 @@ def setup_route_handlers(web_app):
         (debugger_tutor_route_pattern, DebuggerTutorHandler),
         (ai_chat_route_pattern, AIChatHandler),
         (model_recommend_route_pattern, ModelRecommendHandler),
+        # ModelMind background evaluation
+        (
+            evaluation_submit_pattern,
+            EvaluationJobSubmitHandler,
+        ),
+        (
+            evaluation_cancel_pattern,
+            EvaluationJobCancelHandler,
+        ),
+        (
+            evaluation_status_pattern,
+            EvaluationJobStatusHandler,
+        ),
     ]
 
     web_app.add_handlers(host_pattern, handlers)

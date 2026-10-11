@@ -1603,23 +1603,613 @@ export class ModelMindStudioWidget extends Widget {
     frag.appendChild(hdr);
 
     // ── Results container ──
+
+    // Phase 11: opt-in empirical evaluation, separate from heuristic ranking.
+    const evaluationPanel = document.createElement('div');
+    evaluationPanel.style.cssText =
+      'background:#fff;border:1px solid #c7d2fe;border-radius:12px;' +
+      'padding:14px;margin-bottom:16px;';
+
+    const evaluationTitle = document.createElement('div');
+    evaluationTitle.style.cssText =
+      'font-size:14px;font-weight:800;color:#1e293b;margin-bottom:5px;';
+    evaluationTitle.textContent = 'Measured Model Performance';
+
+    const evaluationDescription = document.createElement('div');
+    evaluationDescription.style.cssText =
+      'font-size:11px;color:#64748b;line-height:1.6;margin-bottom:10px;';
+    evaluationDescription.textContent =
+      'Run real 3-fold cross-validation on your selected dataset. ' +
+      'These measured scores are different from the suitability scores ' +
+      'shown in the original recommendations below.';
+
+    const evaluationControls = document.createElement('div');
+    evaluationControls.style.cssText =
+      'display:flex;gap:8px;flex-wrap:wrap;align-items:center;';
+
+    const evaluationButton = document.createElement('button');
+    evaluationButton.type = 'button';
+    evaluationButton.className = 'mm-studio-btn mm-btn-sm mm-btn-accent';
+    evaluationButton.textContent = 'Evaluate Models on My Dataset';
+
+    const evaluationCancel = document.createElement('button');
+    evaluationCancel.type = 'button';
+    evaluationCancel.className = 'mm-studio-btn mm-btn-sm';
+    evaluationCancel.textContent = 'Cancel Evaluation';
+    evaluationCancel.disabled = true;
+
+    const evaluationStatus = document.createElement('div');
+    evaluationStatus.style.cssText =
+      'font-size:11px;color:#475569;margin-top:10px;';
+    evaluationStatus.textContent =
+      'Evaluation has not started.';
+
+    const evaluationResults = document.createElement('div');
+    evaluationResults.style.cssText = 'margin-top:12px;';
+
+    evaluationControls.append(evaluationButton, evaluationCancel);
+    evaluationPanel.append(
+      evaluationTitle,
+      evaluationDescription,
+      evaluationControls,
+      evaluationStatus,
+      evaluationResults
+    );
+    frag.appendChild(evaluationPanel);
+
+    let activeEvaluationJob: string | null = null;
+    let evaluationBusy = false;
+
+    const evaluationSettings =
+      this._app.serviceManager.serverSettings;
+
+    const setEvaluationBusy = (busy: boolean): void => {
+      evaluationBusy = busy;
+      evaluationButton.disabled = busy;
+      evaluationCancel.disabled = !busy || !activeEvaluationJob;
+    };
+
+    const showMeasuredResults = (evaluation: any): void => {
+      evaluationResults.replaceChildren();
+
+      if (!evaluation || evaluation.success !== true) {
+        evaluationStatus.textContent =
+          'Evaluation did not return a successful comparison.';
+        return;
+      }
+
+      const metric = String(evaluation.metric ?? 'score');
+      const higherIsBetter = evaluation.higher_is_better === true;
+
+      const heading = document.createElement('div');
+      heading.style.cssText =
+        'font-size:12px;font-weight:700;margin-bottom:8px;';
+      heading.textContent =
+        `Best measured model: ${String(evaluation.recommended_model ?? 'Unknown')}` +
+        ` | ${metric}: ${String(evaluation.recommended_score ?? 'N/A')}`;
+
+      const explanation = document.createElement('div');
+      explanation.style.cssText =
+        'font-size:10px;color:#64748b;margin-bottom:10px;';
+      explanation.textContent =
+        `${String(evaluation.cv_folds ?? 3)}-fold cross-validation. ` +
+        (higherIsBetter
+          ? 'Higher scores are better.'
+          : 'Lower scores are better.') +
+        ' Results depend on this dataset and are not guarantees.';
+
+      const table = document.createElement('table');
+      table.style.cssText =
+        'width:100%;border-collapse:collapse;font-size:11px;';
+
+      const header = document.createElement('tr');
+      for (const name of [
+        'Model', 'Status', 'Mean score', 'Std. dev.', 'Scaler'
+      ]) {
+        const cell = document.createElement('th');
+        cell.textContent = name;
+        cell.style.cssText =
+          'padding:8px;border-bottom:1px solid #e2e8f0;' +
+          'text-align:left;background:#f8fafc;';
+        header.appendChild(cell);
+      }
+      table.appendChild(header);
+
+      const ranking = Array.isArray(evaluation.ranking)
+        ? evaluation.ranking
+        : [];
+
+      for (const item of ranking) {
+        const row = document.createElement('tr');
+
+        const score = typeof item.mean_score === 'number'
+          ? item.mean_score.toFixed(4)
+          : 'N/A';
+
+        const deviation = typeof item.std_score === 'number'
+          ? item.std_score.toFixed(4)
+          : 'N/A';
+
+        for (const value of [
+          item.model ?? 'Unknown',
+          item.status ?? 'Unknown',
+          score,
+          deviation,
+          item.scaler ?? 'None'
+        ]) {
+          const cell = document.createElement('td');
+          cell.textContent = String(value);
+          cell.style.cssText =
+            'padding:8px;border-bottom:1px solid #e2e8f0;';
+          row.appendChild(cell);
+        }
+
+        table.appendChild(row);
+      }
+
+      evaluationResults.append(heading, explanation, table);
+
+      if (Array.isArray(evaluation.warnings) &&
+          evaluation.warnings.length > 0) {
+        const warning = document.createElement('div');
+        warning.style.cssText =
+          'font-size:10px;color:#92400e;margin-top:10px;';
+        warning.textContent = evaluation.warnings
+          .filter((item: unknown) => typeof item === 'string')
+          .join(' ');
+        evaluationResults.appendChild(warning);
+      }
+    };
+
+    evaluationCancel.addEventListener('click', async () => {
+      if (!activeEvaluationJob) {
+        return;
+      }
+
+      evaluationCancel.disabled = true;
+
+      try {
+        await requestAPI<any>(
+          `api/dataset/evaluation-jobs/${activeEvaluationJob}/cancel`,
+          evaluationSettings,
+          { method: 'POST' }
+        );
+        evaluationStatus.textContent =
+          'Cancellation requested. Waiting for worker to stop...';
+      } catch (error) {
+        evaluationStatus.textContent =
+          `Cancellation request failed: ${String(error)}`;
+        evaluationCancel.disabled = false;
+      }
+    });
+
+    evaluationButton.addEventListener('click', async () => {
+      // Do not start two competing evaluations in one panel.
+      // The main AutoML loader disables runBtn while active.
+      if (evaluationBusy || runBtn.disabled) {
+        return;
+      }
+
+      const selectedTarget = targetSel.value;
+      const selectedPath = this._currentPath;
+
+      if (!selectedPath || !selectedTarget) {
+        evaluationStatus.textContent =
+          'Select a dataset and target column first.';
+        return;
+      }
+
+      // Every result belongs to the exact dataset, target
+      // and panel from which its evaluation started.
+      const isEvaluationCurrent = (): boolean => {
+        return (
+          evaluationPanel.isConnected &&
+          this._activeTab === 'model-advisor' &&
+          this._currentPath === selectedPath &&
+          targetSel.value === selectedTarget
+        );
+      };
+
+      evaluationResults.replaceChildren();
+      activeEvaluationJob = null;
+
+      setEvaluationBusy(true);
+      runBtn.disabled = true;
+
+      evaluationStatus.textContent =
+        'Submitting measured model evaluation...';
+
+      let submittedJobId: string | null = null;
+
+      const cancelObsoleteJob = async (): Promise<void> => {
+        if (!submittedJobId) {
+          return;
+        }
+
+        try {
+          await requestAPI<any>(
+            `api/dataset/evaluation-jobs/${submittedJobId}/cancel`,
+            evaluationSettings,
+            { method: 'POST' }
+          );
+        } catch {
+          // The job may already be finished or no longer
+          // available. The server owns job timeout/cleanup.
+        }
+      };
+
+      try {
+        const submitted = await requestAPI<any>(
+          'api/dataset/evaluation-jobs',
+          evaluationSettings,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file_path: selectedPath,
+              target_col: selectedTarget,
+              cv_folds: 3,
+              evaluate_scalers: false
+            })
+          }
+        );
+
+        if (typeof submitted.job_id !== 'string' ||
+            !submitted.job_id) {
+          throw new Error(
+            'Evaluation job ID was not returned.'
+          );
+        }
+
+        submittedJobId = submitted.job_id;
+        activeEvaluationJob = submitted.job_id;
+
+        // The panel might have changed while the
+        // submission request was in flight.
+        if (!isEvaluationCurrent()) {
+          await cancelObsoleteJob();
+          return;
+        }
+
+        evaluationCancel.disabled = false;
+
+        let finished = false;
+
+        for (let attempt = 0; attempt < 180; attempt++) {
+          // Check before sending the next HTTP request.
+          if (!isEvaluationCurrent()) {
+            await cancelObsoleteJob();
+            return;
+          }
+
+          const job = await requestAPI<any>(
+            `api/dataset/evaluation-jobs/${submitted.job_id}`,
+            evaluationSettings
+          );
+
+          // A dataset, target or navigation change may have
+          // happened while the HTTP request was in flight.
+          if (!isEvaluationCurrent()) {
+            await cancelObsoleteJob();
+            return;
+          }
+
+          const status = String(job.status ?? 'unknown');
+
+          evaluationStatus.textContent =
+            `Dataset target: ${selectedTarget} | Job: ${status}`;
+
+          if (status === 'completed') {
+            finished = true;
+
+            // Results are rendered only for the original
+            // dataset, target and active Model Advisor panel.
+            showMeasuredResults(
+              job.result?.empirical_evaluation
+            );
+
+            break;
+          }
+
+          if (
+            ['failed', 'cancelled', 'timed_out'].includes(status)
+          ) {
+            finished = true;
+
+            evaluationStatus.textContent =
+              `Evaluation ${status}: ${String(job.error ?? '')}`;
+
+            break;
+          }
+
+          await new Promise<void>(resolve => {
+            setTimeout(resolve, 1000);
+          });
+        }
+
+        if (!finished && isEvaluationCurrent()) {
+          evaluationStatus.textContent =
+            'Still waiting. The evaluation may continue on the server.';
+        }
+
+      } catch (error) {
+        if (isEvaluationCurrent()) {
+          evaluationStatus.textContent =
+            `Evaluation error: ${String(error)}`;
+        }
+      } finally {
+        activeEvaluationJob = null;
+        setEvaluationBusy(false);
+        runBtn.disabled = false;
+      }
+    });
+
     const resultsContainer = document.createElement('div');
     frag.appendChild(resultsContainer);
     this._contentArea.appendChild(frag);
 
+    let recommendationBusy = false;
+
     const loadRecommendations = async () => {
+      if (recommendationBusy) {
+        return;
+      }
+
       const chosenTarget = targetSel.value;
-      resultsContainer.innerHTML = '<div class="mm-studio-loading">🤖 Analysing dataset and ranking models…</div>';
+      const chosenPath = this._currentPath;
+
+      // A recommendation belongs to one dataset and target.
+      // Never display it for a different selection or panel.
+      const isRequestCurrent = (): boolean => {
+        return (
+          resultsContainer.isConnected &&
+          this._activeTab === 'model-advisor' &&
+          this._currentPath === chosenPath &&
+          targetSel.value === chosenTarget
+        );
+      };
+
+      if (!chosenTarget || !chosenPath) {
+        resultsContainer.textContent =
+          'Select a dataset and target column first.';
+        return;
+      }
+
+      if (evaluationBusy) {
+        resultsContainer.textContent =
+          'An evaluation is already running in this panel. ' +
+          'Wait for it to finish before requesting recommendations.';
+        return;
+      }
+
+      recommendationBusy = true;
+      runBtn.disabled = true;
+
+      resultsContainer.replaceChildren();
+
+      const statusEl = document.createElement('div');
+      statusEl.className = 'mm-studio-loading';
+      statusEl.textContent =
+        'Starting measured AutoML evaluation...';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'mm-studio-btn mm-btn-sm';
+      cancelBtn.textContent = 'Cancel AutoML';
+      cancelBtn.disabled = true;
+
+      resultsContainer.append(statusEl, cancelBtn);
+
+      let jobId: string | null = null;
+      let cancellationRequested = false;
+
+      cancelBtn.addEventListener('click', async () => {
+        if (!jobId || cancellationRequested) {
+          return;
+        }
+
+        cancellationRequested = true;
+        cancelBtn.disabled = true;
+        statusEl.textContent = 'Requesting cancellation...';
+
+        try {
+          await requestAPI<any>(
+            `api/dataset/evaluation-jobs/${jobId}/cancel`,
+            this._app.serviceManager.serverSettings,
+            { method: 'POST' }
+          );
+        } catch (error) {
+          cancellationRequested = false;
+          cancelBtn.disabled = false;
+          statusEl.textContent =
+            `Cancellation request failed: ${String(error)}`;
+        }
+      });
+
       try {
-        const res = await requestAPI<any>('api/dataset/model-recommend', this._app.serviceManager.serverSettings, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ file_path: this._currentPath, target_col: chosenTarget }),
-        });
-        resultsContainer.replaceChildren();
-        this._renderModelAdvisorResults(resultsContainer, res);
-      } catch (err) {
-        resultsContainer.innerHTML = `<div class="mm-studio-alert mm-alert-error">${err instanceof Error ? err.message : 'Failed to get recommendations.'}</div>`;
+        const settings = this._app.serviceManager.serverSettings;
+
+        const submitted = await requestAPI<any>(
+          'api/dataset/evaluation-jobs',
+          settings,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file_path: chosenPath,
+              target_col: chosenTarget,
+              cv_folds: 3,
+              evaluate_scalers: false
+            })
+          }
+        );
+
+        if (typeof submitted.job_id !== 'string') {
+          throw new Error('Evaluation job ID is missing.');
+        }
+
+        jobId = submitted.job_id;
+        cancelBtn.disabled = false;
+
+        if (!isRequestCurrent()) {
+          try {
+            await requestAPI<any>(
+              `api/dataset/evaluation-jobs/${jobId}/cancel`,
+              settings,
+              { method: 'POST' }
+            );
+          } catch {
+            // The server will still enforce its job timeout.
+          }
+          return;
+        }
+
+        let finished = false;
+
+        for (let attempt = 0; attempt < 180; attempt++) {
+          if (!isRequestCurrent()) {
+            try {
+              await requestAPI<any>(
+                `api/dataset/evaluation-jobs/${jobId}/cancel`,
+                settings,
+                { method: 'POST' }
+              );
+            } catch {
+              // Panel has closed; the server still owns job cleanup.
+            }
+            return;
+          }
+
+          const job = await requestAPI<any>(
+            `api/dataset/evaluation-jobs/${jobId}`,
+            settings
+          );
+
+          // Ignore results belonging to an obsolete selection.
+          if (!isRequestCurrent()) {
+            try {
+              await requestAPI<any>(
+                `api/dataset/evaluation-jobs/${jobId}/cancel`,
+                settings,
+                { method: 'POST' }
+              );
+            } catch {
+              // A completed job cannot necessarily be cancelled.
+            }
+            return;
+          }
+
+          const status = String(job.status ?? 'unknown');
+
+          statusEl.textContent =
+            `AutoML: ${status} — comparing regression or ` +
+            `classification algorithms using cross-validation.`;
+
+          if (status === 'completed') {
+            finished = true;
+
+            const original = job.result;
+            const automl = original?.automl_recommendations;
+
+            if (
+              !original?.handled ||
+              !automl?.success ||
+              !Array.isArray(automl.recommendations) ||
+              automl.recommendations.length === 0
+            ) {
+              throw new Error(
+                'Completed evaluation has no valid AutoML recommendations.'
+              );
+            }
+
+            const models = automl.recommendations.map(
+              (item: any, index: number) => ({
+                name: item.name,
+                rank: index + 1,
+                medal: index === 0 ? '🥇' :
+                  index === 1 ? '🥈' :
+                  index === 2 ? '🥉' : '🏅',
+                score: 0,
+                tags: [
+                  'Measured CV',
+                  automl.task === 'regression'
+                    ? 'Regression'
+                    : 'Classification'
+                ],
+                why:
+                  'Selected using measured cross-validation ' +
+                  'performance among the evaluated finalists. ' +
+                  'The score is an estimate, not a guarantee ' +
+                  'of performance on new data.',
+                strengths: [
+                  'Evaluated on the selected dataset',
+                  'Preprocessing fitted within CV folds'
+                ],
+                weaknesses: [
+                  'Performance depends on the dataset',
+                  'Final holdout performance may differ'
+                ],
+                best_for:
+                  'Datasets where this algorithm performs well ' +
+                  'under the selected evaluation procedure.',
+                training_speed: 'Dataset dependent',
+                complexity: 'Model dependent',
+                interpretability: 'Model dependent',
+                code: item.code_available ? item.code : '',
+                automl_measured: true,
+                measured_score: item.measured_score,
+                measured_std: item.std_score,
+                automl_task: automl.task,
+                code_available: item.code_available,
+                code_error: item.code_error
+              })
+            );
+
+            const rendered = {
+              ...original,
+              models,
+              automl_measured: true,
+              automl_candidate_count: automl.candidate_count,
+              automl_task: automl.task
+            };
+
+            resultsContainer.replaceChildren();
+            this._renderModelAdvisorResults(
+              resultsContainer,
+              rendered
+            );
+
+            break;
+          }
+
+          if (
+            ['failed', 'cancelled', 'timed_out'].includes(status)
+          ) {
+            finished = true;
+            statusEl.textContent =
+              `AutoML ${status}: ${String(job.error ?? '')}`;
+            cancelBtn.disabled = true;
+            break;
+          }
+
+          await new Promise<void>(resolve =>
+            setTimeout(resolve, 1000)
+          );
+        }
+
+        if (!finished) {
+          statusEl.textContent =
+            'Evaluation is still pending on the server.';
+          cancelBtn.disabled = true;
+        }
+
+      } catch (error) {
+        statusEl.textContent =
+          `AutoML failed: ${String(error)}`;
+        cancelBtn.disabled = true;
+      } finally {
+        recommendationBusy = false;
+        runBtn.disabled = false;
       }
     };
 
@@ -1683,6 +2273,11 @@ export class ModelMindStudioWidget extends Widget {
     const secTitle = document.createElement('div');
     secTitle.style.cssText = 'font-size:13px; font-weight:700; margin-bottom:12px; color:#1e293b;';
     secTitle.innerHTML = `🏆 Ranked Model Recommendations <span style="color:#64748b; font-weight:400; font-size:11px;">(${res.models?.length ?? 0} models analysed)</span>`;
+    if (res.automl_measured) {
+      secTitle.textContent =
+        `Measured AutoML Rankings (${res.models.length} finalists ` +
+        `from ${res.automl_candidate_count ?? 'multiple'} candidates)`;
+    }
     frag.appendChild(secTitle);
 
     // ── Model cards ──
@@ -1732,13 +2327,46 @@ export class ModelMindStudioWidget extends Widget {
     `;
     card.appendChild(cardHdr);
 
+    if (model.automl_measured) {
+      const scoreBox = cardHdr.lastElementChild as HTMLElement | null;
+
+      if (scoreBox) {
+        scoreBox.replaceChildren();
+
+        const score = document.createElement('div');
+        score.style.cssText =
+          'font-size:19px;font-weight:900;color:#059669;';
+
+        const value = Number(model.measured_score);
+        const isRegression = model.automl_task === 'regression';
+
+        score.textContent = Number.isFinite(value)
+          ? isRegression
+            ? value.toFixed(4)
+            : `${(value * 100).toFixed(2)}%`
+          : 'N/A';
+
+        const metric = document.createElement('div');
+        metric.style.cssText =
+          'font-size:10px;color:#64748b;font-weight:600;';
+        metric.textContent = isRegression
+          ? 'CV RMSE (lower is better)'
+          : 'CV balanced accuracy';
+
+        scoreBox.append(score, metric);
+      }
+    }
+
+
     // ── Score bar ──
     const barWrap = document.createElement('div');
     barWrap.style.cssText = 'height:6px; border-radius:99px; background:#e2e8f0; margin-bottom:12px; overflow:hidden;';
     const barFill = document.createElement('div');
     barFill.style.cssText = `height:100%; width:${model.score}%; border-radius:99px; background:linear-gradient(90deg, ${scoreColor}aa, ${scoreColor});`;
     barWrap.appendChild(barFill);
-    card.appendChild(barWrap);
+    if (!model.automl_measured) {
+      card.appendChild(barWrap);
+    }
 
     // ── Why recommended ──
     const whyEl = document.createElement('div');
@@ -1748,6 +2376,67 @@ export class ModelMindStudioWidget extends Widget {
     `;
     whyEl.innerHTML = `<b style="color:#15803d; font-weight:700;">✅ Why this model:</b> <span style="color:#166534;">${model.why}</span>`;
     card.appendChild(whyEl);
+    // ModelMind: optional ML dependency availability.
+    // Keep model rank, score, code actions and existing UI unchanged.
+    const dependency = model.dependency_status;
+
+    if (
+      dependency &&
+      dependency.available === false &&
+      typeof dependency.optional_dependency === 'string'
+    ) {
+      const warning = document.createElement('div');
+
+      warning.style.cssText = `
+        padding:10px 12px;
+        margin-bottom:10px;
+        border-radius:8px;
+        background:#fff7ed;
+        border:1px solid #fed7aa;
+        color:#9a3412;
+        font-size:11px;
+        line-height:1.6;
+      `;
+
+      const heading = document.createElement('div');
+      heading.style.fontWeight = '700';
+      heading.textContent = 'Optional ML package unavailable';
+
+      const message = document.createElement('div');
+      message.textContent =
+        typeof dependency.message === 'string'
+          ? dependency.message
+          : 'This model requires an additional Python package.';
+
+      const kernelNote = document.createElement('div');
+      kernelNote.style.marginTop = '4px';
+      kernelNote.textContent =
+        'Availability is checked on the ModelMind server. ' +
+        'Your notebook kernel may use a different environment.';
+
+      warning.appendChild(heading);
+      warning.appendChild(message);
+      warning.appendChild(kernelNote);
+
+      if (
+        Array.isArray(dependency.alternatives) &&
+        dependency.alternatives.length > 0
+      ) {
+        const alternatives = document.createElement('div');
+        alternatives.style.marginTop = '6px';
+
+        alternatives.textContent =
+          'Available-library alternatives to consider: ' +
+          dependency.alternatives
+            .filter((name: unknown) => typeof name === 'string')
+            .join(', ');
+
+        warning.appendChild(alternatives);
+      }
+
+      card.appendChild(warning);
+    }
+
 
     // ── Meta grid: speed, complexity, interpretability ──
     const metaGrid = document.createElement('div');
@@ -1848,6 +2537,20 @@ export class ModelMindStudioWidget extends Widget {
       const ok = this._insertCodeBelow(model.code ?? '');
       this._showToast(ok ? `✓ ${model.name} code inserted!` : 'Open a notebook first.');
     });
+
+    if (model.automl_measured && !model.code_available) {
+      codeToggleBtn.disabled = true;
+      previewBtn.disabled = true;
+      copyBtn2.disabled = true;
+      insertBtn2.disabled = true;
+
+      const note = document.createElement('div');
+      note.style.cssText =
+        'font-size:11px;color:#b45309;margin-top:8px;';
+      note.textContent =
+        model.code_error || 'Executable code is unavailable.';
+      card.appendChild(note);
+    }
 
     btnRow.append(previewBtn, copyBtn2, insertBtn2);
     card.appendChild(btnRow);
