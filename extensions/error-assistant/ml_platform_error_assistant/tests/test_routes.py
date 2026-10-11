@@ -18,6 +18,144 @@ async def test_health(jp_fetch):
     }
 
 
+async def test_gemini_key_status_never_returns_the_secret(jp_fetch, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(routes, "get_stored_gemini_api_key", lambda: "desktop-secret")
+
+    response = await jp_fetch("api", "settings", "gemini-key")
+
+    assert response.code == 200
+    assert json.loads(response.body) == {"configured": True, "source": "desktop"}
+    assert b"desktop-secret" not in response.body
+
+
+async def test_gemini_key_can_be_saved_and_removed(jp_fetch, monkeypatch):
+    stored = {}
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        routes,
+        "get_stored_gemini_api_key",
+        lambda: stored.get("api_key"),
+    )
+    monkeypatch.setattr(
+        routes,
+        "store_gemini_api_key",
+        lambda api_key: stored.update(api_key=api_key),
+    )
+    monkeypatch.setattr(
+        routes,
+        "delete_stored_gemini_api_key",
+        lambda: stored.clear(),
+    )
+
+    save_response = await jp_fetch(
+        "api",
+        "settings",
+        "gemini-key",
+        method="POST",
+        body=json.dumps({"api_key": " desktop-secret "}),
+    )
+    assert save_response.code == 200
+    assert json.loads(save_response.body) == {
+        "configured": True,
+        "source": "desktop",
+    }
+    assert stored == {"api_key": "desktop-secret"}
+    assert b"desktop-secret" not in save_response.body
+
+    remove_response = await jp_fetch(
+        "api",
+        "settings",
+        "gemini-key",
+        method="DELETE",
+    )
+    assert remove_response.code == 200
+    assert json.loads(remove_response.body) == {
+        "configured": False,
+        "source": None,
+    }
+    assert stored == {}
+
+
+async def test_gemini_key_rejects_bad_payloads_and_allows_personal_override(
+    jp_fetch, monkeypatch
+):
+    stored = {"api_key": None}
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        routes,
+        "get_stored_gemini_api_key",
+        lambda: stored["api_key"],
+    )
+    monkeypatch.setattr(
+        routes,
+        "store_gemini_api_key",
+        lambda api_key: stored.update(api_key=api_key),
+    )
+    monkeypatch.setattr(
+        routes,
+        "delete_stored_gemini_api_key",
+        lambda: stored.update(api_key=None),
+    )
+    malformed = await jp_fetch(
+        "api",
+        "settings",
+        "gemini-key",
+        method="POST",
+        body=json.dumps({"api_key": "", "extra": "field"}),
+        raise_error=False,
+    )
+    assert malformed.code == 400
+
+    monkeypatch.setenv("GEMINI_API_KEY", "server-managed")
+    before_save = await jp_fetch("api", "settings", "gemini-key")
+    assert json.loads(before_save.body) == {
+        "configured": True,
+        "source": "environment",
+    }
+
+    save_response = await jp_fetch(
+        "api",
+        "settings",
+        "gemini-key",
+        method="POST",
+        body=json.dumps({"api_key": "desktop-secret"}),
+    )
+    assert save_response.code == 200
+    assert json.loads(save_response.body) == {
+        "configured": True,
+        "source": "desktop",
+    }
+    assert b"desktop-secret" not in save_response.body
+
+    remove_response = await jp_fetch(
+        "api",
+        "settings",
+        "gemini-key",
+        method="DELETE",
+    )
+    assert remove_response.code == 200
+    assert json.loads(remove_response.body) == {
+        "configured": True,
+        "source": "environment",
+    }
+
+
+async def test_gemini_key_settings_requires_jupyter_auth(jp_fetch):
+    response = await jp_fetch(
+        "api",
+        "settings",
+        "gemini-key",
+        headers={"Authorization": "token invalid"},
+        raise_error=False,
+    )
+
+    assert response.code == 403
+
+
 async def test_dataset_target_analyzes_categorical_branch(jp_fetch, tmp_path):
     dataset_path = tmp_path / "students.csv"
     dataset_path.write_text(

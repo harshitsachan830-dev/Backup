@@ -54,4 +54,4 @@ if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
     Write-Host "Model installation remains explicit and must be approved before any pull command."
 }
 
-& $jupyter lab --no-browser --port $Port --ServerApp.root_dir $Workspace
+& $jupyter lab --port $Port --ServerApp.ip=127.0.0.1 --ServerApp.open_browser=True --LabServerApp.open_browser=True --ServerApp.root_dir $Workspace

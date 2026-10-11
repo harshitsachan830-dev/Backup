@@ -197,12 +197,15 @@ function injectChatStyles(): void {
       display: flex;
       flex-direction: column;
       height: 100%;
+      min-width: 0;
       background: var(--ml-assistant-panel-bg, #f5f6f8);
       color: var(--ml-assistant-text, #253041);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
       overflow: hidden;
       position: relative;
       border-left: 1px solid var(--ml-assistant-border, #dfe3ea);
+      container-name: mm-chatbot;
+      container-type: inline-size;
     }
 
     /* Header matching AI Assistant */
@@ -221,9 +224,11 @@ function injectChatStyles(): void {
       align-items: center;
       justify-content: space-between;
       gap: 10px;
+      min-width: 0;
     }
 
     .mm-chatbot-title {
+      min-width: 0;
       font-size: 1.05rem;
       font-weight: 700;
       color: var(--ml-assistant-text, #253041);
@@ -242,6 +247,7 @@ function injectChatStyles(): void {
     .mm-chatbot-provider-switch {
       display: flex;
       align-items: center;
+      flex-shrink: 0;
       gap: 6px;
       background: var(--ml-assistant-panel-bg, #f5f6f8);
       padding: 3px;
@@ -250,6 +256,7 @@ function injectChatStyles(): void {
     }
 
     .mm-chatbot-provider-btn {
+      min-width: 0;
       padding: 4px 10px;
       border-radius: 6px;
       border: 1px solid transparent;
@@ -332,6 +339,7 @@ function injectChatStyles(): void {
       font-size: 11px;
       color: var(--ml-assistant-muted, #5d6b80);
       font-weight: 600;
+      flex-wrap: wrap;
     }
 
     .mm-chatbot-context-chip {
@@ -366,6 +374,7 @@ function injectChatStyles(): void {
       gap: 14px;
       background: var(--ml-assistant-panel-bg, #f5f6f8);
       scroll-behavior: smooth;
+      min-width: 0;
     }
 
     .mm-chatbot-messages::-webkit-scrollbar {
@@ -460,6 +469,7 @@ function injectChatStyles(): void {
       display: flex;
       gap: 9px;
       max-width: 100%;
+      min-width: 0;
     }
 
     .mm-chat-msg-user {
@@ -500,6 +510,7 @@ function injectChatStyles(): void {
       flex-direction: column;
       gap: 3px;
       max-width: calc(100% - 38px);
+      min-width: 0;
     }
 
     .mm-chat-bubble-header {
@@ -757,10 +768,12 @@ function injectChatStyles(): void {
       display: flex;
       gap: 8px;
       align-items: flex-end;
+      min-width: 0;
     }
 
     .mm-chatbot-textarea {
       flex: 1;
+      min-width: 0;
       background: #ffffff;
       border: 1px solid var(--ml-assistant-border, #dfe3ea);
       border-radius: 8px;
@@ -824,6 +837,29 @@ function injectChatStyles(): void {
     .mm-chatbot-send-btn.gemini-mode:hover:not(:disabled) {
       background: #1d4ed8;
       border-color: #1d4ed8;
+    }
+
+    @container mm-chatbot (max-width: 380px) {
+      .mm-chatbot-header { padding-inline: 10px; }
+      .mm-chatbot-title-row { align-items: flex-start; gap: 7px; }
+      .mm-chatbot-title {
+        flex: 0 1 92px;
+        align-items: flex-start;
+        line-height: 1.08;
+      }
+      .mm-chatbot-provider-switch { flex: 1 1 auto; gap: 3px; }
+      .mm-chatbot-provider-btn {
+        flex: 1 1 0;
+        justify-content: center;
+        padding: 5px 6px;
+        white-space: nowrap;
+      }
+      .mm-chatbot-context-bar { padding-inline: 10px; }
+      .mm-chatbot-messages { padding: 10px; }
+      .mm-chatbot-input-area { padding-inline: 10px; }
+      .mm-chatbot-input-helpers { gap: 5px; }
+      .mm-chat-helper-btn { flex: 0 1 auto; padding-inline: 7px; }
+      .mm-chatbot-clear-btn { margin-left: auto; }
     }
   `;
   document.head.appendChild(style);
@@ -1061,15 +1097,14 @@ export function createAIChatbotPanel(
   // Refresh status from server
   async function refreshPlatformStatus(): Promise<void> {
     try {
-      const health = await requestAPI<{
-        status: string;
-        cloud_fallback: string;
-        gemini_fallback_available: boolean;
-      }>('api/health', settings);
+      const keyStatus = await requestAPI<{
+        configured: boolean;
+        source: 'desktop' | 'environment' | null;
+      }>('api/settings/gemini-key', settings);
 
-      if (health.gemini_fallback_available) {
+      if (keyStatus.configured) {
         cloudPill.classList.remove('offline');
-        cloudPill.innerHTML = '<span class="mm-chatbot-status-dot"></span> Gemini (Cloud AI)';
+        cloudPill.innerHTML = '<span class="mm-chatbot-status-dot"></span> Gemini configured';
       } else {
         cloudPill.classList.add('offline');
         cloudPill.innerHTML = '<span class="mm-chatbot-status-dot"></span> Gemini unconfigured';
@@ -1101,6 +1136,9 @@ export function createAIChatbotPanel(
   }
 
   void refreshPlatformStatus();
+  window.addEventListener('modelmind:gemini-key-updated', () => {
+    void refreshPlatformStatus();
+  });
 
   ollamaBtn.addEventListener('click', () => switchProvider('ollama'));
   geminiBtn.addEventListener('click', () => switchProvider('gemini'));
@@ -1189,7 +1227,8 @@ export function createAIChatbotPanel(
         } else if (result.status === 'ollama_unavailable') {
           errText = '🦙 Ollama is not running. Start Ollama, or switch to Gemini.';
         } else if (result.status === 'gemini_unconfigured') {
-          errText = '✨ Gemini API key not configured. Set GEMINI_API_KEY environment variable.';
+          errText =
+            '✨ Open the 🔑 API Key tab in the right sidebar to save your Gemini key.';
         } else if (result.status === 'gemini_unavailable') {
           errText = result.message ? `✨ ${result.message}` : '✨ Gemini is temporarily unavailable. Try again or switch to Ollama.';
         } else if (result.message) {

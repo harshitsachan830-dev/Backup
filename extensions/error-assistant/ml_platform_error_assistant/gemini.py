@@ -9,6 +9,7 @@ from tornado.simple_httpclient import SimpleAsyncHTTPClient
 
 from .fix_validation import is_complete_cell_fix
 from .ollama import _build_fix_hint, validate_fix_response
+from .credentials import get_stored_gemini_api_key
 
 GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 GEMINI_DEFAULT_MODEL = "gemini-3.8-flash"
@@ -27,7 +28,11 @@ def gemini_model_id():
 
 
 def gemini_api_key():
-    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    return (
+        get_stored_gemini_api_key()
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+    )
 
 
 def create_http_client():

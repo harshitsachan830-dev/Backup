@@ -43,4 +43,9 @@ if ! command -v ollama >/dev/null 2>&1; then
   echo "Model installation remains explicit and must be approved before any pull command."
 fi
 
-exec "$JUPYTER_BIN" lab --no-browser --port "$PORT" --ServerApp.root_dir "$WORKSPACE"
+exec "$JUPYTER_BIN" lab \
+  --port "$PORT" \
+  --ServerApp.ip=127.0.0.1 \
+  --ServerApp.open_browser=True \
+  --LabServerApp.open_browser=True \
+  --ServerApp.root_dir "$WORKSPACE"

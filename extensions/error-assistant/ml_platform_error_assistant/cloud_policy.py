@@ -1,5 +1,7 @@
 import os
 
+from .credentials import get_stored_gemini_api_key
+
 DEFAULT_CLOUD_FALLBACK_MODE = "disabled"
 VALID_CLOUD_FALLBACK_MODES = {"disabled", "local_only", "enabled"}
 
@@ -22,7 +24,7 @@ def gemini_fallback_enabled():
 
 
 def gemini_api_key_configured():
-    return bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+    return bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or get_stored_gemini_api_key())
 
 
 def health_policy_status():

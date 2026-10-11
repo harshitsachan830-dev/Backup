@@ -8,7 +8,7 @@ The target product adds an error assistant that diagnoses notebook failures, use
 
 ## Status
 
-**Local notebook and Ollama flows are implemented and tested on the developer Mac.** Gemini code-fix fallback requires two opt-ins: the server must set `ML_PLATFORM_CLOUD_FALLBACK=enabled` and a server-side `GEMINI_API_KEY`, and the user must check **Allow Gemini fallback** in the assistant. Ollama remains first; Gemini is contacted only after Ollama cannot provide a valid fix. The UI warns that code, traceback, and adjacent cell context can be sent to Google. No credential is sent to the browser. A live key/model check and one generation call succeeded with `gemini-3.8-flash`; a later call returned a transient 503, and an ambiguous NameError test produced a syntactically valid but semantically poor suggestion. Suggestions still require review; OS certification is pending.
+**Local notebook and Ollama flows are implemented and tested on the developer Mac.** Gemini code-fix fallback requires two opt-ins: the server must set `ML_PLATFORM_CLOUD_FALLBACK=enabled` and have a Gemini key configured, and the user must check **Allow Gemini fallback** in the assistant. Ollama remains first; Gemini is contacted only after Ollama cannot provide a valid fix. The UI warns that code, traceback, and adjacent cell context can be sent to Google. No credential is sent to the browser. A live key/model check and one generation call succeeded with `gemini-3.8-flash`; a later call returned a transient 503, and an ambiguous NameError test produced a syntactically valid but semantically poor suggestion. Suggestions still require review; OS certification is pending.
 
 See [context.md](context.md) for the report-derived phase checklist, implementation decisions, verified environment facts, and next action. Update it and this README whenever a phase, dependency pin, security decision, or supported-platform result changes.
 
@@ -35,7 +35,7 @@ Windows PowerShell:
 .\scripts\start-platform.ps1
 ```
 
-The launcher creates or updates the local virtual environment, installs the pinned project requirements and the JupyterLab extension, and starts JupyterLab with a local workspace. It does not download Ollama or the recommended model automatically. If the local AI path is desired, install Ollama and then use the explicit model installer flow or the manual `ollama pull` command after approval.
+The launcher creates or updates the local virtual environment, installs the pinned project requirements and the JupyterLab extension, and starts JupyterLab with a local workspace. It opens JupyterLab in your browser using the server's newly generated local login token, so you do not need to copy or enter a token. Keep the launcher running while using the notebook. The server listens only on your own computer; do not share its tokenized URL. If you open the dashboard's notebook link, use the same browser where the launcher opened JupyterLab. It does not download Ollama or the recommended model automatically. If the local AI path is desired, install Ollama and then use the explicit model installer flow or the manual `ollama pull` command after approval.
 
 ## Start the stock notebook baseline
 
@@ -63,17 +63,20 @@ python -m pip install -e extensions/error-assistant
 jupyter lab
 ```
 
-Open the local URL printed by JupyterLab. The Error Assistant command is in the View menu; it opens the right-side panel and checks authenticated platform, Ollama, recommended-model, and Gemini fallback status. Select a failed cell and choose **Explain Error** or **Suggest Fix**. Choose **Ollama (local)** or **Gemini (cloud)** from **Fix provider**; Gemini requires both server configuration and the explicit **Allow Gemini use** opt-in. With Ollama selected, that opt-in also permits Gemini fallback if Ollama cannot provide a valid suggestion. The selected provider requests a complete corrected cell and rejects responses that appear to contain only a partial patch. **Apply Fix** remains a separate action that replaces and reruns the cell, so review the full suggested code first. Choose **Code Help** or **Ask AI** to ask local Ollama about the selected cell. When Gemini is used, the cell code, traceback, and adjacent code are sent to Google.
+JupyterLab opens in the browser when the launcher starts. The Error Assistant command is in the View menu; it opens the right-side panel and checks authenticated platform, Ollama, recommended-model, and Gemini fallback status. Select a failed cell and choose **Explain Error** or **Suggest Fix**. Choose **Ollama (local)** or **Gemini (cloud)** from **Fix provider**; Gemini requires both server configuration and the explicit **Allow Gemini use** opt-in. With Ollama selected, that opt-in also permits Gemini fallback if Ollama cannot provide a valid suggestion. The selected provider requests a complete corrected cell and rejects responses that appear to contain only a partial patch. **Apply Fix** remains a separate action that replaces and reruns the cell, so review the full suggested code first. Choose **Code Help** or **Ask AI** to ask local Ollama about the selected cell. When Gemini is used, the cell code, traceback, and adjacent code are sent to Google.
 
-To configure Gemini, enter your key in the root `.env` file. The startup scripts load it without printing its value, and `.env` is ignored by Git. Change the fallback setting to `enabled` only when you want to permit Gemini requests. The assistant still requires the user to check its per-session opt-in before sending code to Google. Keep the key out of notebooks and source files.
+To configure Gemini on a personal desktop, open the **API Key** tab in the JupyterLab right sidebar and save the key there. The extension stores it with Python `keyring` in the operating system's credential store (such as macOS Keychain or Windows Credential Manager); the key is never returned to the browser or written into a notebook. A personal key saved in the panel takes precedence over `GEMINI_API_KEY` or `GOOGLE_API_KEY` from the Jupyter server environment; removing the personal key returns to the environment key, if present. The root `.env` file remains available for server-managed deployments and is ignored by Git.
+
+Automatic Gemini fallback for fixes remains disabled unless `ML_PLATFORM_CLOUD_FALLBACK=enabled` is set. A per-session **Allow Gemini use** opt-in is still required before notebook code and error context can be sent to Google for a fix. Chat requests use Gemini only after the user selects the Gemini provider.
 
 ```dotenv
 ML_PLATFORM_CLOUD_FALLBACK=enabled
+# Optional for server-managed deployments; local desktop users can use API Key in JupyterLab.
 GEMINI_API_KEY=paste-your-key-here
 GEMINI_MODEL=gemini-3.8-flash
 ```
 
-Restart JupyterLab after editing `.env`. Leaving the setting unset or set to `disabled` keeps all Gemini calls off.
+Restart JupyterLab after editing `.env`. Leaving the fallback setting unset or set to `disabled` prevents automatic Gemini fix fallback.
 
 The backend checks Ollama at `127.0.0.1:11434` with bounded timeouts and a 64 KiB response limit. The manifest is [model-manifest.json](extensions/error-assistant/ml_platform_error_assistant/model-manifest.json). This Mac is an M4 with 16 GB unified memory; Ollama reports version `0.35.0`, and the recommended model can be installed only through the explicit user-approved install flow or a manual `ollama pull` command. Nothing is downloaded silently.
 

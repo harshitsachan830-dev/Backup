@@ -2,9 +2,11 @@ import json
 
 import pytest
 
+from ml_platform_error_assistant import gemini as gemini_module
 from ml_platform_error_assistant.gemini import (
     GEMINI_API_BASE_URL,
     GEMINI_TIMEOUT_SECONDS,
+    gemini_api_key,
     suggest_fix_with_gemini,
 )
 
@@ -27,6 +29,21 @@ class FakeClient:
 
 def json_bytes(value):
     return json.dumps(value).encode("utf-8")
+
+
+@pytest.fixture(autouse=True)
+def isolate_desktop_credential_store(monkeypatch):
+    monkeypatch.setattr(gemini_module, "get_stored_gemini_api_key", lambda: None)
+
+
+def test_personal_gemini_key_overrides_server_environment(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "server-secret")
+    monkeypatch.setattr(
+        "ml_platform_error_assistant.gemini.get_stored_gemini_api_key",
+        lambda: "desktop-secret",
+    )
+
+    assert gemini_api_key() == "desktop-secret"
 
 
 @pytest.mark.asyncio
@@ -79,6 +96,10 @@ async def test_gemini_fix_keeps_api_key_in_header_and_validates_complete_cell(mo
 async def test_gemini_returns_unconfigured_without_sending_request(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "ml_platform_error_assistant.gemini.get_stored_gemini_api_key",
+        lambda: None,
+    )
     client = FakeClient([])
     error = {
         "cell_id": "cell-1",
@@ -92,6 +113,41 @@ async def test_gemini_returns_unconfigured_without_sending_request(monkeypatch):
 
     assert result["status"] == "gemini_unconfigured"
     assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_gemini_uses_the_saved_desktop_key_when_no_environment_key_exists(
+    monkeypatch,
+):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "ml_platform_error_assistant.gemini.get_stored_gemini_api_key",
+        lambda: "desktop-secret",
+    )
+    fix = {"summary": "No changes needed.", "candidate_code": "print(1)"}
+    client = FakeClient(
+        [
+            FakeResponse(
+                200,
+                json_bytes(
+                    {"candidates": [{"content": {"parts": [{"text": json.dumps(fix)}]}}]}
+                ),
+            )
+        ]
+    )
+    error = {
+        "cell_id": "cell-1",
+        "code": "print(1)",
+        "error_type": "CustomError",
+        "error_message": "failed",
+        "traceback": "Traceback",
+    }
+
+    await suggest_fix_with_gemini(error, client=client)
+
+    assert client.requests[0].headers["x-goog-api-key"] == "desktop-secret"
+    assert "desktop-secret" not in client.requests[0].url
 
 
 @pytest.mark.asyncio

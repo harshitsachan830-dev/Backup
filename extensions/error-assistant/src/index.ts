@@ -6,6 +6,7 @@ import { isCodeCellModel } from '@jupyterlab/cells';
 import { IMainMenu } from '@jupyterlab/mainmenu';
 import type { IError, IOutput } from '@jupyterlab/nbformat';
 import { INotebookTracker, NotebookActions } from '@jupyterlab/notebook';
+import { ITranslator } from '@jupyterlab/translation';
 import { Widget } from '@lumino/widgets';
 
 import modelMindLogo from '../style/modelmind-logo.png';
@@ -15,6 +16,7 @@ import { requestAPI } from './request';
 import { createModelMindStudioWidget } from './modelmind-studio';
 import { createFAB as createTutorFAB, loadTutorExplanation } from './debugger-tutor';
 import { createAIChatbotPanel } from './ai-chatbot';
+import { createAPIKeySettingsWidget } from './api-key-settings';
 
 const COMMAND_ID = '@ml-platform/error-assistant:open';
 const MAX_CODE_LENGTH = 20_000;
@@ -310,13 +312,15 @@ const plugin: JupyterFrontEndPlugin<void> = {
   id: '@ml-platform/error-assistant:plugin',
   description: 'JupyterLab error assistant frontend and server extension',
   autoStart: true,
-  requires: [IMainMenu, INotebookTracker],
+  requires: [IMainMenu, INotebookTracker, ITranslator],
   activate: (
     app: JupyterFrontEnd,
     mainMenu: IMainMenu,
-    notebooks: INotebookTracker
+    notebooks: INotebookTracker,
+    translator: ITranslator
   ) => {
     setModelMindFavicon();
+    const trans = translator.load('@ml-platform/error-assistant');
 
     const panel = new Widget();
     panel.id = 'ml-platform-error-assistant-panel';
@@ -566,7 +570,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
                   : suggestion.status === 'gemini_opt_in_required'
                     ? 'Check Allow Gemini use before selecting Gemini'
                     : suggestion.status === 'gemini_unconfigured'
-                      ? 'Configure the Gemini API key on the server first'
+                      ? 'Save a Gemini API key in JupyterLab using the API Key tab in the right sidebar'
                       : suggestion.status === 'gemini_unavailable'
                         ? 'Gemini is temporarily unavailable; try again later'
                         : suggestion.status === 'model_missing'
@@ -892,6 +896,16 @@ const plugin: JupyterFrontEndPlugin<void> = {
     const studioWidget = createModelMindStudioWidget(app, notebooks);
     app.shell.add(studioWidget, 'left', { rank: 300 });
 
+    const apiKeyWidget = createAPIKeySettingsWidget(
+      app.serviceManager.serverSettings,
+      trans
+    );
+    apiKeyWidget.title.label = '🔑 API Key';
+    apiKeyWidget.title.caption = trans.__(
+      'Save Gemini credentials in this computer’s credential store'
+    );
+    app.shell.add(apiKeyWidget, 'right', { rank: 700 });
+
     const STUDIO_COMMAND = 'modelmind:open-studio';
     app.commands.addCommand(STUDIO_COMMAND, {
       label: 'Open ModelMind Studio',
@@ -1042,6 +1056,12 @@ function setupLeftSidebarSectionLabels(): void {
       shortName: 'ML Studio',
       fullName: 'ModelMind ML Studio & Preprocessing',
       description: 'Dataset Intelligence, Preprocessing Advisor & Model Selection'
+    },
+    {
+      match: (id, title) => id.includes('api-key') || title.toLowerCase().includes('api key'),
+      shortName: 'API Key',
+      fullName: 'ModelMind API Key Settings',
+      description: 'Store Gemini credentials in the computer’s credential store'
     },
     {
       match: (id, title) => id === 'table-of-contents' || title.toLowerCase().includes('table of contents') || title.toLowerCase().includes('outline'),

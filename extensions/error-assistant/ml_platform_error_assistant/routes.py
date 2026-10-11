@@ -12,6 +12,11 @@ from .cloud_policy import (
     gemini_fallback_enabled,
     health_policy_status,
 )
+from .credentials import (
+    delete_stored_gemini_api_key,
+    get_stored_gemini_api_key,
+    store_gemini_api_key,
+)
 from .diagnostics import analyze_error
 from .gemini import suggest_fix_with_gemini, chat_with_gemini
 from .fix_validation import (
@@ -54,6 +59,8 @@ from .model_recommender import (
 )
 
 MAX_CAPTURE_BYTES = 40_000
+MAX_API_KEY_BYTES = 4_096
+MAX_API_KEY_LENGTH = 512
 MAX_FIELD_LENGTHS = {
     "cell_id": 256,
     "code": 20_000,
@@ -91,6 +98,75 @@ class HealthHandler(APIHandler):
         health = {"status": "ok", "local_ai": "setup_pending"}
         health.update(health_policy_status())
         self.finish(json.dumps(health))
+
+
+class GeminiAPIKeyHandler(APIHandler):
+    @tornado.web.authenticated
+    def get(self):
+        self.set_header("Content-Type", "application/json")
+        environment_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        try:
+            stored_key = get_stored_gemini_api_key()
+        except Exception:
+            self.log.exception("Could not read the operating-system credential store.")
+            self.set_status(503)
+            self.finish(json.dumps({"error": "The system credential store is unavailable."}))
+            return
+
+        source = "desktop" if stored_key else "environment" if environment_key else None
+        self.finish(json.dumps({"configured": bool(environment_key or stored_key), "source": source}))
+
+    @tornado.web.authenticated
+    def post(self):
+        self.set_header("Content-Type", "application/json")
+        if len(self.request.body) > MAX_API_KEY_BYTES:
+            self.set_status(413)
+            self.finish(json.dumps({"error": "The API key request is too large."}))
+            return
+
+        try:
+            payload = json.loads(self.request.body)
+            if not isinstance(payload, dict) or set(payload) != {"api_key"}:
+                raise ValueError("The request must contain only api_key.")
+            api_key = payload["api_key"]
+            if not isinstance(api_key, str):
+                raise ValueError("api_key must be a string.")
+            api_key = api_key.strip()
+            if not api_key or len(api_key) > MAX_API_KEY_LENGTH:
+                raise ValueError(f"api_key must be between 1 and {MAX_API_KEY_LENGTH} characters.")
+            store_gemini_api_key(api_key)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
+            self.set_status(400)
+            self.finish(json.dumps({"error": str(error)}))
+            return
+        except Exception:
+            self.log.exception("Could not save the Gemini API key to the operating-system credential store.")
+            self.set_status(503)
+            self.finish(json.dumps({"error": "The system credential store is unavailable."}))
+            return
+
+        self.finish(json.dumps({"configured": True, "source": "desktop"}))
+
+    @tornado.web.authenticated
+    def delete(self):
+        self.set_header("Content-Type", "application/json")
+        try:
+            delete_stored_gemini_api_key()
+        except Exception:
+            self.log.exception("Could not delete the Gemini API key from the operating-system credential store.")
+            self.set_status(503)
+            self.finish(json.dumps({"error": "The system credential store is unavailable."}))
+            return
+
+        environment_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        self.finish(
+            json.dumps(
+                {
+                    "configured": bool(environment_key),
+                    "source": "environment" if environment_key else None,
+                }
+            )
+        )
 
 
 class AnalyzeErrorHandler(APIHandler):
@@ -274,7 +350,7 @@ class SuggestFixHandler(APIHandler):
                     json.dumps(
                         {
                             "status": "gemini_unconfigured",
-                            "message": "Set GEMINI_API_KEY in the Jupyter server environment to enable Gemini.",
+                            "message": "Save a Gemini API key in the JupyterLab right sidebar's API Key tab to enable Gemini.",
                         }
                     )
                 )
@@ -317,7 +393,7 @@ class SuggestFixHandler(APIHandler):
                         "status": "gemini_unconfigured",
                         "fallback_used": False,
                         "ollama_status": local_result.get("status"),
-                        "message": "Set GEMINI_API_KEY in the Jupyter server environment to enable Gemini.",
+                        "message": "Save a Gemini API key in the JupyterLab right sidebar's API Key tab to enable Gemini.",
                     }
                 )
             )
@@ -767,7 +843,7 @@ class AIChatHandler(APIHandler):
             if not gemini_api_key_configured():
                 self.finish(json.dumps({
                     "status": "gemini_unconfigured",
-                    "message": "Set GEMINI_API_KEY in the Jupyter server environment to enable Gemini.",
+                    "message": "Save a Gemini API key in the JupyterLab right sidebar's API Key tab to enable Gemini.",
                 }))
                 return
             result = await chat_with_gemini(
@@ -867,6 +943,7 @@ def setup_route_handlers(web_app):
     base_url = web_app.settings["base_url"]
 
     health_route_pattern = url_path_join(base_url, "api", "health")
+    gemini_api_key_route_pattern = url_path_join(base_url, "api", "settings", "gemini-key")
     analyze_error_route_pattern = url_path_join(base_url, "api", "error", "analyze")
     explain_error_route_pattern = url_path_join(base_url, "api", "ai", "explain")
     local_ai_status_route_pattern = url_path_join(base_url, "api", "local-ai", "status")
@@ -891,6 +968,7 @@ def setup_route_handlers(web_app):
 
     handlers = [
         (health_route_pattern, HealthHandler),
+        (gemini_api_key_route_pattern, GeminiAPIKeyHandler),
         (analyze_error_route_pattern, AnalyzeErrorHandler),
         (explain_error_route_pattern, ExplainErrorHandler),
         (local_ai_status_route_pattern, LocalAIStatusHandler),
@@ -914,4 +992,3 @@ def setup_route_handlers(web_app):
     ]
 
     web_app.add_handlers(host_pattern, handlers)
-
