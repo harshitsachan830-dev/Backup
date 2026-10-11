@@ -35,6 +35,24 @@ function setModelMindFavicon(): void {
   document.head.appendChild(favicon);
 }
 
+function removeJupyterSplashOrbitAnimation(): void {
+  const style = document.createElement('style');
+  style.id = 'modelmind-splash-branding';
+  style.textContent = `
+    #jupyterlab-splash #moon1,
+    #jupyterlab-splash #moon2,
+    #jupyterlab-splash #moon3 {
+      display: none !important;
+      animation: none !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+// Apply while the splash is visible, before JupyterLab activates plugins.
+setModelMindFavicon();
+removeJupyterSplashOrbitAnimation();
+
 type CapturedError = {
   cell_id: string;
   code: string;
@@ -319,7 +337,6 @@ const plugin: JupyterFrontEndPlugin<void> = {
     notebooks: INotebookTracker,
     translator: ITranslator
   ) => {
-    setModelMindFavicon();
     const trans = translator.load('@ml-platform/error-assistant');
 
     const panel = new Widget();

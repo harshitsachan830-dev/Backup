@@ -2,7 +2,7 @@
 
 A cross-platform ML notebook product built on JupyterLab and Jupyter Server. The notebook remains the standard Jupyter experience; product features are added through a small JupyterLab frontend extension and an authenticated Jupyter Server extension.
 
-The notebook application is branded **ModelMind Notebook** with the supplied ModelMind logo. The Error Assistant opens in a polished side panel with clear error summaries, readable explanations, collapsible tracebacks, and separate controls for suggesting, copying, and applying fixes. JupyterLab's built-in Help links, update/news settings, and required third-party attribution remain enabled.
+The notebook application is branded **ModelMind Notebook** with the supplied ModelMind logo, including the startup splash and browser tab. The Jupyter startup orbit animation is hidden. The Error Assistant opens in a polished side panel with clear error summaries, readable explanations, collapsible tracebacks, and separate controls for suggesting, copying, and applying fixes. JupyterLab's built-in Help links, update/news settings, and required third-party attribution remain enabled.
 
 The target product adds an error assistant that diagnoses notebook failures, uses local Ollama first for complex explanations, optionally routes to Gemini through a secured backend, and only offers code changes after sandbox validation. The desktop distribution is the planned way to manage local runtime setup on macOS and Windows. A browser-only page cannot silently install Ollama on a user's computer.
 
@@ -35,7 +35,7 @@ Windows PowerShell:
 .\scripts\start-platform.ps1
 ```
 
-The launcher creates or updates the local virtual environment, installs the pinned project requirements and the JupyterLab extension, and starts JupyterLab with a local workspace. It opens JupyterLab in your browser using the server's newly generated local login token, so you do not need to copy or enter a token. Keep the launcher running while using the notebook. The server listens only on your own computer; do not share its tokenized URL. If you open the dashboard's notebook link, use the same browser where the launcher opened JupyterLab. It does not download Ollama or the recommended model automatically. If the local AI path is desired, install Ollama and then use the explicit model installer flow or the manual `ollama pull` command after approval.
+The launcher creates or updates the local virtual environment, installs the pinned project requirements and JupyterLab extensions, and starts JupyterLab with a local workspace. The branding settings in `jupyter-config` use the project logo and set the browser tab title; the startup customization hides JupyterLab's orbit animation. It opens JupyterLab in your browser using the server's newly generated local login token, so you do not need to copy or enter a token. Keep the launcher running while using the notebook. The server listens only on your own computer; do not share its tokenized URL. If you open the dashboard's notebook link, use the same browser where the launcher opened JupyterLab. It does not download Ollama or the recommended model automatically. If the local AI path is desired, install Ollama and then use the explicit model installer flow or the manual `ollama pull` command after approval.
 
 ## Start the stock notebook baseline
 
@@ -49,6 +49,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install -e extensions/error-assistant
+export JUPYTER_CONFIG_PATH="$PWD/jupyter-config${JUPYTER_CONFIG_PATH:+:$JUPYTER_CONFIG_PATH}"
 jupyter lab
 ```
 
@@ -60,6 +61,7 @@ py -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m pip install -e extensions/error-assistant
+$env:JUPYTER_CONFIG_PATH = "$(Get-Location)\jupyter-config;$env:JUPYTER_CONFIG_PATH"
 jupyter lab
 ```
 

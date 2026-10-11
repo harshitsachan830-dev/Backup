@@ -153,7 +153,7 @@ Run these gates on each OS claimed as supported. Until then, describe macOS and 
 ## Decisions still open
 
 - Minimum supported Python version and certified Python/OS matrix.
-- Product name, branding assets, and pinned extension/build toolchain.
+- Pinned frontend extension/build toolchain.
 - Default coding model and hardware/storage guidance.
 - Desktop framework and signing/distribution approach for macOS and Windows.
 - Gemini gateway hosting/authentication/usage policy.
@@ -164,3 +164,9 @@ Run these gates on each OS claimed as supported. Until then, describe macOS and 
 - The ModelMind web workspace now opens on a resource dashboard organized as Roadmap, Notebook, Visualizations, and VideoGPT. The supplied roadmap, 18 visualization applications, and VideoGPT deployment are connected as external links; external sites open in a new tab.
 - The local JupyterLab extension exposes an API Key panel on the right sidebar. A personal key saved there is stored with Python `keyring`, takes precedence over server environment keys, and is never returned by the authenticated API. Removing the personal key falls back to a configured environment key.
 - This adds local keychain storage to the personal desktop flow; operating-system credential-store behavior still needs validation on each supported OS. Existing cloud-fallback and per-session Gemini consent gates remain in force.
+
+## 2026-10-11 implementation update
+
+- Added pinned `jupyterlab_branding_extension==1.0.36` and project Jupyter config to use the supplied ModelMind logo for the main application and startup splash and to set the browser tab title to **ModelMind Notebook**.
+- The platform launchers and documented manual setup export `jupyter-config` through `JUPYTER_CONFIG_PATH`; the startup orbit elements are hidden by the frontend extension before plugin activation.
+- Verified the configured server extension loads, serves branding configuration, and displays the ModelMind browser title and logo in a live JupyterLab session. Extension build and unit tests pass on the developer Mac; cross-platform startup remains unverified.

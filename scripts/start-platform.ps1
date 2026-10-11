@@ -9,6 +9,13 @@ $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $venv = Join-Path $root ".venv"
 $envFile = Join-Path $root ".env"
+$configPath = Join-Path $root "jupyter-config"
+
+if ($env:JUPYTER_CONFIG_PATH) {
+    $env:JUPYTER_CONFIG_PATH = "$configPath;$env:JUPYTER_CONFIG_PATH"
+} else {
+    $env:JUPYTER_CONFIG_PATH = $configPath
+}
 
 if (Test-Path $envFile) {
     $allowedSettings = @("ML_PLATFORM_CLOUD_FALLBACK", "GEMINI_API_KEY", "GEMINI_MODEL")
