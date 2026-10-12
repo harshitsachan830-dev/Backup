@@ -1155,7 +1155,7 @@ export class ModelMindStudioWidget extends Widget {
         pipelineInsertBtn.className = 'mm-studio-btn mm-btn-sm mm-btn-primary';
         pipelineInsertBtn.innerHTML = '📥 Insert Pipeline';
         pipelineInsertBtn.addEventListener('click', () => {
-          const ok = this._insertCodeBelow(res.pipeline_code!);
+          const ok = this._insertPreprocessingCode(res.pipeline_code!);
           this._showToast(ok ? '✓ Pipeline code inserted!' : 'Open a notebook first.');
         });
         pipelineBtnRow.append(pipelineCopyBtn, pipelineInsertBtn);
@@ -1328,7 +1328,7 @@ export class ModelMindStudioWidget extends Widget {
     insertBtn.title = 'Insert Python code into active notebook cell';
     insertBtn.addEventListener('click', () => {
       const code = rec.example_code || `# Preprocessing for ${rec.feature}\n# Strategy: ${stratSelect.value}\n`;
-      const ok = this._insertCodeBelow(code);
+      const ok = this._insertPreprocessingCode(code);
       if (ok) {
         this._showToast('✓ Code inserted below active cell!');
       } else {
@@ -2179,6 +2179,16 @@ export class ModelMindStudioWidget extends Widget {
               rendered
             );
 
+            // Optional Fast Tune. Existing results remain unchanged.
+            this._renderFastTuneTopFive(
+              resultsContainer,
+              jobId!,
+              chosenPath,
+              chosenTarget,
+              automl,
+              original.empirical_evaluation
+            );
+
             break;
           }
 
@@ -2286,6 +2296,513 @@ export class ModelMindStudioWidget extends Widget {
     });
 
     container.appendChild(frag);
+  }
+
+
+  /**
+   * Optional Fast Tune Top 5.
+   *
+   * Runs only after a completed AutoML evaluation and only
+   * when the student explicitly clicks the tuning button.
+   *
+   * No changes to Model Advisor ranking or existing cards.
+   */
+  private _renderFastTuneTopFive(
+    container: HTMLElement,
+    evaluationJobId: string,
+    datasetPath: string,
+    targetColumn: string,
+    automl: any,
+    empirical: any
+  ): void {
+    const recommendations = automl?.recommendations;
+    const featureColumns = empirical?.features;
+    const task = empirical?.task;
+
+    if (
+      !Array.isArray(recommendations) ||
+      recommendations.length < 1 ||
+      recommendations.length > 5 ||
+      !Array.isArray(featureColumns) ||
+      featureColumns.length === 0 ||
+      !['classification', 'regression'].includes(task)
+    ) {
+      return;
+    }
+
+    const names = recommendations.map(
+      (item: any) => item.name
+    );
+
+    if (
+      !names.every((name: unknown) =>
+        typeof name === 'string' && name.length > 0
+      )
+    ) {
+      return;
+    }
+
+    const section = document.createElement('section');
+    section.className = 'mm-studio-section';
+    section.style.cssText =
+      'margin-top:18px;padding:16px;border:1px solid #c7d2fe;' +
+      'border-radius:12px;background:#f8faff;';
+
+    const heading = document.createElement('div');
+    heading.style.cssText =
+      'font-size:15px;font-weight:800;color:#1e293b;';
+    heading.textContent = 'Fast Hyperparameter Tuning';
+
+    const explanation = document.createElement('p');
+    explanation.style.cssText =
+      'font-size:12px;line-height:1.6;color:#475569;' +
+      'margin:8px 0 12px;';
+    explanation.textContent =
+      'Search important parameters for your measured Top 5. ' +
+      'Basic tests fewer configurations. Advanced explores ' +
+      'more important settings. Only useful changes are shown.';
+
+    const modeRow = document.createElement('div');
+    modeRow.style.cssText =
+      'display:flex;gap:8px;align-items:center;margin-bottom:10px;';
+
+    const modeLabel = document.createElement('label');
+    modeLabel.textContent = 'Tuning level:';
+    modeLabel.style.cssText =
+      'font-size:12px;font-weight:700;color:#334155;';
+
+    const modeSelect = document.createElement('select');
+    modeSelect.className = 'mm-studio-select';
+
+    (['basic', 'advanced'] as const).forEach(level => {
+      const option = document.createElement('option');
+      option.value = level;
+      option.textContent =
+        level === 'basic' ? 'Basic' : 'Advanced';
+      modeSelect.appendChild(option);
+    });
+
+    modeRow.append(modeLabel, modeSelect);
+
+    const modeHelp = document.createElement('div');
+    modeHelp.style.cssText =
+      'font-size:11px;color:#64748b;margin-bottom:10px;';
+
+    const updateModeHelp = () => {
+      modeHelp.textContent = modeSelect.value === 'advanced'
+        ? 'Advanced: up to 20 configurations per model. ' +
+          'More exploration; time limit may stop the search.'
+        : 'Basic: up to 8 configurations per model. ' +
+          'Focuses on high-impact hyperparameters.';
+    };
+
+    modeSelect.addEventListener('change', updateModeHelp);
+    updateModeHelp();
+
+    const buttonRow = document.createElement('div');
+    buttonRow.style.cssText =
+      'display:flex;gap:8px;flex-wrap:wrap;';
+
+    const tuneButton = document.createElement('button');
+    tuneButton.type = 'button';
+    tuneButton.className =
+      'mm-studio-btn mm-btn-sm mm-btn-primary';
+    tuneButton.textContent = '⚡ Fast Tune Top 5';
+
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'mm-studio-btn mm-btn-sm';
+    cancelButton.textContent = 'Cancel Tuning';
+    cancelButton.disabled = true;
+    cancelButton.style.display = 'none';
+
+    const status = document.createElement('div');
+    status.setAttribute('role', 'status');
+    status.style.cssText =
+      'font-size:12px;color:#475569;margin-top:10px;';
+    status.textContent = 'Tuning has not started.';
+
+    const output = document.createElement('div');
+    output.style.cssText = 'margin-top:12px;';
+
+    buttonRow.append(tuneButton, cancelButton);
+    section.append(
+      heading,
+      explanation,
+      modeRow,
+      modeHelp,
+      buttonRow,
+      status,
+      output
+    );
+    container.appendChild(section);
+
+    let activeJobId: string | null = null;
+    let busy = false;
+
+    const isCurrent = () =>
+      section.isConnected &&
+      this._activeTab === 'model-advisor' &&
+      this._currentPath === datasetPath &&
+      this._targetCol === targetColumn;
+
+    const settings = this._app.serviceManager.serverSettings;
+
+    const printResult = (result: any) => {
+      output.replaceChildren();
+
+      const title = document.createElement('div');
+      title.style.cssText =
+        'font-size:13px;font-weight:800;margin-bottom:8px;';
+      title.textContent = 'Tuned Models — Tested Results';
+      output.appendChild(title);
+
+      const note = document.createElement('p');
+      note.style.cssText =
+        'font-size:11px;color:#64748b;line-height:1.5;';
+      note.textContent =
+        'Fast tuning uses a smaller validation experiment. ' +
+        'Do not compare these scores directly with the original ' +
+        'AutoML cross-validation scores.';
+      output.appendChild(note);
+
+      const ranking = Array.isArray(result?.results)
+        ? result.results
+        : Array.isArray(result?.ranking)
+          ? result.ranking
+          : [];
+
+      if (!ranking.length) {
+        const message = document.createElement('pre');
+        message.style.cssText =
+          'font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere;';
+        message.textContent = JSON.stringify(result, null, 2);
+        output.appendChild(message);
+        return;
+      }
+
+
+      const formattedScore = (item: any): string => {
+        const raw =
+          item?.best_score ??
+          item?.mean_score ??
+          item?.score ??
+          item?.best?.score;
+
+        if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+          return 'No valid CV score';
+        }
+
+        if (task === 'regression') {
+          return `RMSE: ${Math.abs(raw).toFixed(4)} (lower is better)`;
+        }
+
+        const label = String(result?.metric ?? 'Accuracy');
+
+        if (/accuracy|f1|precision|recall|roc.?auc/i.test(label)) {
+          return `${label}: ${(raw * 100).toFixed(2)}%`;
+        }
+
+        return `${label}: ${raw.toFixed(4)}`;
+      };
+
+      const formatValue = (value: unknown): string => {
+        if (value === null) return 'None';
+        if (typeof value === 'string') return value;
+        return JSON.stringify(value);
+      };
+
+      ranking.forEach((item: any, index: number) => {
+        const card = document.createElement('div');
+        card.style.cssText =
+          'padding:12px;margin:8px 0;' +
+          'border:1px solid #e2e8f0;' +
+          'border-radius:10px;background:#fff;';
+
+        const name = document.createElement('div');
+        name.style.cssText =
+          'font-size:13px;font-weight:700;color:#0f172a;';
+
+        const modelName = String(
+          item?.model ?? item?.name ?? 'Model'
+        );
+
+        name.textContent = `${index + 1}. ${modelName}`;
+
+        const score = document.createElement('div');
+        score.style.cssText =
+          'font-size:12px;font-weight:600;' +
+          'color:#059669;margin-top:6px;';
+        score.textContent = formattedScore(item);
+
+
+        const parameterText = document.createElement('div');
+        parameterText.style.cssText =
+          'font-size:11px;color:#475569;margin-top:7px;line-height:1.6;';
+
+        const recommendations = Array.isArray(
+          item?.recommended_changes
+        ) ? item.recommended_changes : [];
+
+        const params =
+          item?.best_params &&
+          typeof item.best_params === 'object' &&
+          !Array.isArray(item.best_params)
+            ? item.best_params as Record<string, unknown>
+            : {};
+
+        if (
+          recommendations.length > 0 ||
+          Object.keys(params).length > 0
+        ) {
+          const heading = document.createElement('div');
+          heading.style.fontWeight = '700';
+          heading.textContent = item?.completed === false
+            ? 'Promising changes found (search incomplete):'
+            : 'Recommended parameter changes:';
+          parameterText.appendChild(heading);
+
+          if (recommendations.length > 0) {
+            recommendations.forEach((rec: any) => {
+              const row = document.createElement('div');
+              row.textContent =
+                `${String(rec.parameter)}: ` +
+                `${formatValue(rec.default)} → ` +
+                `${formatValue(rec.recommended)}`;
+              parameterText.appendChild(row);
+            });
+          } else {
+            Object.entries(params).forEach(([key, value]) => {
+              const row = document.createElement('div');
+              row.textContent =
+                `${key}: ${formatValue(value)}`;
+              parameterText.appendChild(row);
+            });
+          }
+        } else {
+          const state = String(
+            item?.recommendation_status ?? ''
+          );
+
+          if (state === 'partial_defaults_recommended') {
+            parameterText.textContent =
+              'Default parameters performed best so far. ' +
+              'Search incomplete — more configurations remain untested.';
+          } else if (state === 'partial_parameter_changes') {
+            parameterText.textContent =
+              'Promising changes found, but the search is incomplete.';
+          } else if (state === 'defaults_recommended') {
+            parameterText.textContent =
+              'Keep default parameters. Tested alternatives ' +
+              'did not provide a meaningful improvement.';
+          } else if (state === 'baseline_unavailable') {
+            parameterText.textContent =
+              'The default baseline was unavailable. ' +
+              'No parameter changes can be recommended reliably.';
+          } else if (
+            state === 'no_valid_configuration' ||
+            item?.status === 'failed'
+          ) {
+            parameterText.textContent =
+              'No valid configuration was evaluated.';
+          } else {
+            parameterText.textContent =
+              'No parameter changes recommended.';
+          }
+        }
+
+        const baseline = item?.baseline_score;
+        const bestTested = item?.best_tested_score;
+
+        if (
+          typeof baseline === 'number' &&
+          Number.isFinite(baseline) &&
+          typeof bestTested === 'number' &&
+          Number.isFinite(bestTested)
+        ) {
+          const comparison = document.createElement('div');
+          comparison.style.cssText =
+            'font-size:10px;color:#64748b;margin-top:6px;';
+          comparison.textContent =
+            `Default CV: ${baseline.toFixed(4)} • ` +
+            `Best tested CV: ${bestTested.toFixed(4)}`;
+          parameterText.appendChild(comparison);
+        }
+
+        const testedCount = item?.configurations_tested;
+        const plannedCount = item?.configurations_planned;
+
+        if (
+          typeof testedCount === 'number' &&
+          typeof plannedCount === 'number' &&
+          plannedCount > 0
+        ) {
+          const progress = document.createElement('div');
+          progress.style.cssText =
+            'font-size:11px;color:#475569;margin-top:7px;';
+          progress.textContent =
+            `Configurations tested: ${testedCount}/${plannedCount}`;
+          parameterText.appendChild(progress);
+        }
+
+        if (item?.completed === false) {
+          const warning = document.createElement('div');
+          warning.style.cssText =
+            'font-size:11px;color:#b45309;margin-top:6px;';
+          warning.textContent =
+            'Partial search: not all configurations were tested.';
+          parameterText.appendChild(warning);
+        }
+
+        const details = document.createElement('details');
+        details.style.cssText =
+          'margin-top:9px;font-size:11px;color:#475569;';
+
+        const summary = document.createElement('summary');
+        summary.textContent = 'Advanced Details';
+        summary.style.cssText =
+          'cursor:pointer;font-weight:600;color:#4338ca;';
+
+        const technical = document.createElement('pre');
+        technical.style.cssText =
+          'margin:8px 0 0;padding:9px;' +
+          'background:#f8fafc;border-radius:8px;' +
+          'white-space:pre-wrap;overflow-wrap:anywhere;' +
+          'font-size:10px;';
+
+        technical.textContent = JSON.stringify(item, null, 2);
+
+        details.append(summary, technical);
+        card.append(name, score, parameterText, details);
+        output.appendChild(card);
+      });
+    };
+
+    cancelButton.addEventListener('click', async () => {
+      if (!activeJobId) return;
+
+      cancelButton.disabled = true;
+      status.textContent = 'Cancellation requested...';
+
+      try {
+        await requestAPI<any>(
+          `api/dataset/tuning-jobs/${activeJobId}/cancel`,
+          settings,
+          { method: 'POST' }
+        );
+      } catch (error) {
+        status.textContent =
+          `Cancellation request failed: ${String(error)}`;
+        cancelButton.disabled = false;
+      }
+    });
+
+    tuneButton.addEventListener('click', async () => {
+      if (busy || !isCurrent()) return;
+
+      busy = true;
+      activeJobId = null;
+      tuneButton.disabled = true;
+      cancelButton.disabled = true;
+      cancelButton.style.display = 'none';
+      output.replaceChildren();
+      modeSelect.disabled = true;
+      const chosenLevel = modeSelect.value as 'basic' | 'advanced';
+      status.textContent = `Submitting ${chosenLevel} tuning for Top 5...`;
+
+      try {
+        const submitted = await requestAPI<any>(
+          'api/dataset/tuning-jobs',
+          settings,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              evaluation_job_id: evaluationJobId,
+              file_path: datasetPath,
+              target_column: targetColumn,
+              feature_columns: featureColumns,
+              task,
+              model_names: names,
+              time_budget_seconds: chosenLevel === 'advanced' ? 120 : 60,
+              level: chosenLevel
+            })
+          }
+        );
+
+        if (typeof submitted?.job_id !== 'string') {
+          throw new Error('Tuning job ID is missing.');
+        }
+
+        activeJobId = submitted.job_id;
+        cancelButton.disabled = false;
+        cancelButton.style.display = 'inline-flex';
+
+        let terminal = false;
+
+        for (let attempt = 0; attempt < 240; attempt++) {
+          if (!isCurrent()) {
+            status.textContent =
+              'Panel changed. Tuning continues on the server ' +
+              'unless it is cancelled or reaches its timeout.';
+            break;
+          }
+
+          const job = await requestAPI<any>(
+            `api/dataset/tuning-jobs/${activeJobId}`,
+            settings
+          );
+
+          const jobStatus = String(job?.status ?? 'unknown');
+
+          status.textContent = `Fast tuning: ${jobStatus}`;
+
+          if (jobStatus === 'completed') {
+            terminal = true;
+            printResult(job.result);
+            status.textContent =
+              `Tuning finished: ${String(job.result?.models_completed ?? 0)}/` +
+              `${names.length} models fully searched.` +
+              (job.result?.timed_out ? ' Time budget reached.' : '') +
+              ' Original AutoML results are unchanged.';
+            break;
+          }
+
+          if (
+            ['failed', 'cancelled', 'timed_out'].includes(jobStatus)
+          ) {
+            terminal = true;
+            status.textContent =
+              `Fast tuning ${jobStatus}: ` +
+              String(job?.error ?? '');
+            break;
+          }
+
+          await new Promise<void>(resolve =>
+            setTimeout(resolve, 1000)
+          );
+        }
+
+        if (!terminal && isCurrent()) {
+          status.textContent =
+            'Tuning is taking longer than expected. ' +
+            'Check the job status before starting another run.';
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          status.textContent =
+            `Fast Tune error: ${String(error)}`;
+        }
+      } finally {
+        busy = false;
+        modeSelect.disabled = false;
+        tuneButton.disabled = !isCurrent();
+        cancelButton.disabled = true;
+        cancelButton.style.display = 'none';
+      }
+    });
   }
 
   private _buildModelCard(model: any, targetCol: string): HTMLElement {
@@ -3257,6 +3774,136 @@ export class ModelMindStudioWidget extends Widget {
   // ═════════════════════════════════════════════════════════════════
   // UTILITIES: INSERT CODE & TOAST
   // ═════════════════════════════════════════════════════════════════
+  private _detectNotebookDatasetVariable(): string | null {
+    const current = this._notebooks.currentWidget;
+    if (!current?.content) return null;
+
+    const selected = this._currentPath
+      .replace(/\\/g, '/')
+      .replace(/^\.\//, '')
+      .toLowerCase();
+
+    const selectedFile = selected.split('/').pop() ?? selected;
+    const matches: string[] = [];
+
+    for (const cell of current.content.widgets) {
+      if (!cell.model || !isCodeCellModel(cell.model)) continue;
+
+      const sourceValue = cell.model.toJSON().source;
+      const text = Array.isArray(sourceValue)
+        ? sourceValue.join('')
+        : String(sourceValue ?? '');
+
+      const pattern =
+        /(?:^|\n)\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:pd|pandas)\.read_(?:csv|excel|json|parquet)\s*\(\s*(['"])([^'"]+)\2/g;
+
+      let match: RegExpExecArray | null;
+
+      while ((match = pattern.exec(text)) !== null) {
+        const variable = match[1];
+        const file = match[3]
+          .replace(/\\/g, '/')
+          .replace(/^\.\//, '')
+          .toLowerCase();
+
+        const filename = file.split('/').pop() ?? file;
+
+        if (
+          file === selected ||
+          filename === selectedFile
+        ) {
+          matches.push(variable);
+        }
+      }
+    }
+
+    const unique = [...new Set(matches)];
+
+    // If several different variables loaded the same file, let
+    // the runtime check determine whether selection is ambiguous.
+    return unique.length === 1 ? unique[0] : null;
+  }
+
+  private _insertPreprocessingCode(code: string): boolean {
+    const current = this._notebooks.currentWidget;
+
+    if (!current?.content) {
+      this._showToast('Open a notebook first.');
+      return false;
+    }
+
+    const preferredName = this._detectNotebookDatasetVariable();
+
+    // The Python cell examines the actual running kernel.
+    // The notebook's CSV-loading assignment is used as a preference,
+    // rather than assuming every student calls their DataFrame "df".
+    const preferredPython = preferredName
+      ? JSON.stringify(preferredName)
+      : 'None';
+
+    const indentedCode = code
+      .split(/\r?\n/)
+      .map(line => line.trim() ? `    ${line}` : '')
+      .join('\n');
+
+    const before = [
+      '# ModelMind: automatically bind preprocessing to your DataFrame',
+      'import pandas as _mm_pd',
+      '',
+      `_mm_preferred_name = ${preferredPython}`,
+      '_mm_available = {',
+      '    name: value',
+      '    for name, value in list(globals().items())',
+      '    if isinstance(value, _mm_pd.DataFrame)',
+      '    and not name.startswith("_")',
+      '}',
+      '',
+      'if (',
+      '    _mm_preferred_name is not None',
+      '    and _mm_preferred_name in _mm_available',
+      '):',
+      '    _mm_dataframe_name = _mm_preferred_name',
+      'elif len(_mm_available) == 1:',
+      '    _mm_dataframe_name = next(iter(_mm_available))',
+      'elif not _mm_available:',
+      '    raise NameError(',
+      '        "No pandas DataFrame is available. "',
+      '        "Run your dataset-loading cell before preprocessing."',
+      '    )',
+      'else:',
+      '    raise ValueError(',
+      '        "Multiple pandas DataFrames are available: "',
+      '        + ", ".join(sorted(_mm_available))',
+      '        + ". ModelMind could not identify the selected dataset. "',
+      '        + "Select the matching dataset in ModelMind Studio "',
+      '        + "or keep only one unambiguous DataFrame."',
+      '    )',
+      '',
+      '_mm_had_df = "df" in globals()',
+      '_mm_old_df = globals().get("df")',
+      'df = _mm_available[_mm_dataframe_name]',
+      '',
+      'try:'
+    ].join('\n');
+
+    const after = [
+      '',
+      '    globals()[_mm_dataframe_name] = df',
+      'finally:',
+      '    if _mm_dataframe_name != "df":',
+      '        if _mm_had_df:',
+      '            df = _mm_old_df',
+      '        else:',
+      '            del df',
+      '',
+      'print("ModelMind preprocessing used DataFrame:", _mm_dataframe_name)'
+    ].join('\n');
+
+    const adapted = `${before}\n${indentedCode}\n${after}\n`;
+
+    return this._insertCodeBelow(adapted);
+  }
+
   private _insertCodeBelow(code: string): boolean {
     const current = this._notebooks.currentWidget;
     if (!current) return false;

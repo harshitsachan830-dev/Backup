@@ -1178,6 +1178,13 @@ def setup_route_handlers(web_app):
     ai_chat_route_pattern = url_path_join(base_url, "api", "ai", "chat")
     model_recommend_route_pattern = url_path_join(base_url, "api", "dataset", "model-recommend")
 
+    # Independent ModelMind Fast Tuning endpoints.
+    from .background_tuning_routes import (
+        TuningJobSubmitHandler,
+        TuningJobStatusHandler,
+        TuningJobCancelHandler,
+    )
+
     # ModelMind background evaluation endpoints
     evaluation_submit_pattern = url_path_join(
         base_url, "api", "dataset", "evaluation-jobs"
@@ -1194,6 +1201,26 @@ def setup_route_handlers(web_app):
         "api",
         "dataset",
         "evaluation-jobs",
+        r"([a-f0-9]{32})",
+        "cancel",
+    )
+
+    # Fast Tuning: independent of existing AutoML jobs.
+    tuning_submit_pattern = url_path_join(
+        base_url, "api", "dataset", "tuning-jobs"
+    )
+    tuning_status_pattern = url_path_join(
+        base_url,
+        "api",
+        "dataset",
+        "tuning-jobs",
+        r"([a-f0-9]{32})",
+    )
+    tuning_cancel_pattern = url_path_join(
+        base_url,
+        "api",
+        "dataset",
+        "tuning-jobs",
         r"([a-f0-9]{32})",
         "cancel",
     )
@@ -1235,5 +1262,21 @@ def setup_route_handlers(web_app):
             EvaluationJobStatusHandler,
         ),
     ]
+
+    # Additive registrations. Existing handlers remain unchanged.
+    handlers.extend([
+        (
+            tuning_submit_pattern,
+            TuningJobSubmitHandler,
+        ),
+        (
+            tuning_cancel_pattern,
+            TuningJobCancelHandler,
+        ),
+        (
+            tuning_status_pattern,
+            TuningJobStatusHandler,
+        ),
+    ])
 
     web_app.add_handlers(host_pattern, handlers)

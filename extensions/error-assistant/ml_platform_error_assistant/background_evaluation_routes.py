@@ -410,6 +410,31 @@ class EvaluationJobSubmitHandler(APIHandler):
             # Keep owner records aligned with retained jobs.
             _prune_owner_registry()
 
+            # Optional Fast Tune dataset identity registration.
+            # Failure must not change normal AutoML behavior.
+            try:
+                from .fast_tuning_dataset_binding import (
+                    register_evaluation_dataset,
+                )
+
+                register_evaluation_dataset(
+                    job_id=job_id,
+                    owner=owner,
+                    dataset_path=path,
+                )
+
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Optional Fast Tune dataset binding failed "
+                    "for evaluation job %s. Normal AutoML "
+                    "continues; tuning will require a new "
+                    "successfully bound evaluation.",
+                    job_id,
+                    exc_info=True,
+                )
+
         except RuntimeError as error:
             self.set_status(429)
             self.finish(json.dumps({"error": str(error)}))
